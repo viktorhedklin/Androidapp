@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Shown inline in the menu bar dropdown until both TCC permissions are

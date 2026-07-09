@@ -56,18 +56,15 @@ internet access). Also added `.github/workflows/build-apk.yml`
 APK on GitHub's runners and upload it as a downloadable artifact, since
 this sandbox has no Android SDK and can't build/verify an APK directly.
 
-## Push access note (2026-07-06)
+## Push access note (resolved 2026-07-06)
 
-Commits `3c9c1d1` (batch G, wip) and this Batch I commit are sitting on
-the local branch `claude/android-game-autopilot-7mc6mx` **unpushed**.
-`git push` fails with `Permission to viktorhedklin/Androidapp.git denied
-to alpha666c` — the GitHub identity behind this session has read access
-(fetch/branch-list work fine) but not write access. The repo owner needs
-to grant `alpha666c` collaborator/write access (or fix the GitHub App
-installation) before any further pushes can land. Diagnosed via direct
-curl against the git relay (`127.0.0.1:41729`) and the GitHub MCP tools —
-not a proxy glitch, a real permissions gap. Next session: check whether
-push works now before assuming it's still blocked.
+Was blocked earlier the same day — `alpha666c` (the GitHub identity this
+session pushes as) had read but not write access to
+`viktorhedklin/Androidapp`. Fixed once the repo owner added `alpha666c`
+as a collaborator with Write role. All commits through the macOS port
+below pushed successfully after that — no longer an issue, leaving this
+note only so a future session understands why earlier commits mention
+push failures.
 
 ## Batch I — Gemini provider + persistent per-game memory (done)
 
@@ -250,3 +247,95 @@ references classes (`App`, `MainActivity`, `ui.*`, `accessibility.*`,
 `overlay.OverlayService`) that don't exist until Batches B–D. This is
 intentional pacing; the next batch is meaningful work and the manifest
 is locked in.
+
+---
+
+## macOS port (`mac/`) — done, device-unverified (2026-07-09)
+
+User asked whether the Android autopilot could become a Mac version,
+then said "make it happen." **Not a port of the Kotlin code** — a new
+native Swift app in `mac/`, same repo/branch, reusing the *brain
+contract* (prompt shape, strict-JSON action schema, the 3 providers) and
+*loop shape* (capture → perceive → think → act → wait, dHash stuck-state
+breaker) but built entirely on macOS-native frameworks
+(ScreenCaptureKit/AXUIElement/Vision/CGEvent instead of MediaProjection/
+AccessibilityService).
+
+**Locked decisions** (via AskUserQuestion): lives in `mac/` subfolder of
+this repo (not a new repo), native Swift Package Manager (not a
+hand-written `.xcodeproj`), v1 is a **menu bar utility**
+(`MenuBarExtra`, no Dock icon) — pick a running app/window as target,
+Start/Stop, no persisted multi-target library UI like Android's
+`GameRepository`. Minimum target macOS 14 Sonoma (needed by
+`SCScreenshotManager.captureImage`, the one-shot capture API).
+
+**Critical constraint**: this sandbox has no macOS/Xcode/Swift-Apple-
+frameworks toolchain — **nothing in `mac/` has compiled or run.**
+Architecture was validated by a dedicated Plan-agent research pass before
+writing any code (API choices, gotchas, concrete signatures for the
+riskiest files), and every file was written carefully against that
+research, but real verification is entirely on whoever builds this next
+on an actual Mac. See `mac/README.md`'s "Known risk areas" section.
+
+### Status table
+
+| Step | Description | Status | Commit |
+|------|------------------------------------------------|--------|---------|
+| 1 | Skeleton: Package.swift, Info.plist, build.sh, minimal menu bar app | done | aee730f |
+| 2 | Core primitives (MarkBox/ScreenSnapshot/ActionRing) + extended Action taxonomy | done | 9d59efe |
+| 3 | Brain layer (Brain/PromptBuilder/BrainResponseParser/OpenAICompatibleBrain/GeminiBrain/BrainFactory) + Settings model | done | 63cdc06 |
+| 4 | Perception + Capture (ScreenCapture, AccessibilityReader, OcrEngine, CandidateExtractor, SetOfMarksOverlay, ScreenshotEncoder) | done | 58df87d |
+| 5 | ActionDispatcher (CGEvent) + Keychain + Permissions | done | 89993d3 |
+| 6 | Orchestration (DecisionLoop actor, AutopilotController, TargetMemoryStore) + concurrency fixes | done | 8487658 |
+| 7 | Menu bar UI (App.swift, MenuBarView, SettingsView, TargetPickerView, OnboardingView) | done | b1ce2ae |
+| 8 | mac/README.md + this PROGRESS.md section | done | (this commit) |
+
+**Next**: build on a real Mac, fix whatever doesn't compile (the README
+flags the most likely trouble spots), test against a real target app.
+Nothing further is planned server-side until that feedback loop happens.
+
+### Key decisions to preserve
+
+- Package/bundle id: `com.gameautopilot.mac`, chosen once and meant to
+  stay fixed — TCC ties Accessibility/Screen Recording grants to
+  bundle id + code signature, so changing it later forces re-granting.
+- **Ad-hoc codesigning (`codesign --sign -`, `build.sh`'s default)
+  changes identity every rebuild**, forcing a permission re-grant after
+  every build. `build.sh --sign "cert name"` with a one-time
+  self-signed persistent certificate (documented in `mac/README.md`)
+  avoids this — important enough to repeat here since it's the single
+  most annoying thing to discover the hard way during dev.
+- No build/compile verification was possible in this sandbox, so
+  correctness leaned on getting documented API shapes right the first
+  time rather than iterating on compiler feedback. Two real concurrency
+  bugs were caught and fixed during the build itself (not by a
+  compiler): `ActionDispatcher` originally captured mutable state via
+  closures across actor boundaries (fixed by threading `bounds` as a
+  per-call parameter and `targetPID` as a fixed `let`), and
+  `TargetMemoryStore.cache` was mutated from both `DecisionLoop`'s actor
+  and the UI with no lock (fixed with `NSLock`). Worth extra scrutiny on
+  any future concurrency-touching change here, precisely because it
+  can't be compiler-checked from this environment.
+- Vision's OCR `boundingBox` is bottom-left-origin/normalized — flipped
+  to top-left-origin pixels inside `OcrEngine.swift` so every other file
+  only ever deals with one coordinate convention (matching AX/CGEvent/
+  screenshot pixel space). `SetOfMarksOverlay.swift` deliberately does
+  **not** apply a CTM flip to its CGContext (a manual flip would have
+  turned the base screenshot upside down, since `CGContext.draw(_:in:)`
+  already orients an image correctly in a context's native bottom-left/
+  Y-up space) — each mark's rect converts its own Y instead.
+  `NSGraphicsContext(cgContext:flipped:false)` is used for text drawing
+  to match.
+- Action taxonomy diverges from Android on purpose: `back` (hardware
+  button) → `keyPress(keys:)`; added `doubleClick`/`rightClick`/`scroll`
+  since a held-button drag is a selection gesture on Mac, not a scroll.
+- API key lives in Keychain from day one (`Util/Keychain.swift`), never
+  in `Settings`/`UserDefaults` — a deliberate improvement over Android's
+  documented plaintext-SharedPreferences tradeoff, cheap enough to just
+  do properly here.
+- `AutopilotController` is deliberately **not** class-wide `@MainActor`
+  — only state-mutating methods are, so `buildSnapshot()`'s OCR/AX/
+  image-encoding work doesn't run on the main actor and jank the status
+  item.
+- Zero third-party SPM dependencies — everything used is a system
+  framework.
