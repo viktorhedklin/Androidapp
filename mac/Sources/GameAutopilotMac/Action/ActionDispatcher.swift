@@ -9,42 +9,48 @@ import Foundation
 /// as reliably). Text input prefers AXUIElement, falling back to CGEvent
 /// unicode-string synthesis. Mirrors core/ActionDispatcher.kt +
 /// accessibility/GestureDispatcher.kt combined.
+///
+/// `bounds` is threaded through as a per-call parameter rather than a
+/// captured closure over mutable state: this instance can be called from
+/// DecisionLoop's actor context on a different executor than whatever
+/// last updated a "current bounds" var would run on, so a closure over
+/// shared mutable state here would be a real data race, not just a
+/// theoretical one. `targetPID` is fixed at init time (a run's target
+/// doesn't change mid-loop) so it's safe as a plain `let`.
 final class ActionDispatcher {
-    private let screenBounds: () -> CGRect
-    private let targetPID: () -> pid_t?
+    private let targetPID: pid_t?
 
-    init(screenBounds: @escaping () -> CGRect, targetPID: @escaping () -> pid_t?) {
-        self.screenBounds = screenBounds
+    init(targetPID: pid_t?) {
         self.targetPID = targetPID
     }
 
     @discardableResult
-    func dispatch(_ action: Action, marks: [MarkBox]) async -> Bool {
+    func dispatch(_ action: Action, marks: [MarkBox], bounds: CGRect) async -> Bool {
         switch action {
         case .tap(let x, let y):
-            return click(x: x, y: y, button: .left, clickCount: 1)
+            return click(x: x, y: y, button: .left, clickCount: 1, bounds: bounds)
         case .tapMark(let id):
             guard let m = mark(id, marks) else { return false }
-            return click(x: m.cx, y: m.cy, button: .left, clickCount: 1)
+            return click(x: m.cx, y: m.cy, button: .left, clickCount: 1, bounds: bounds)
         case .doubleClick(let x, let y):
-            return click(x: x, y: y, button: .left, clickCount: 2)
+            return click(x: x, y: y, button: .left, clickCount: 2, bounds: bounds)
         case .doubleClickMark(let id):
             guard let m = mark(id, marks) else { return false }
-            return click(x: m.cx, y: m.cy, button: .left, clickCount: 2)
+            return click(x: m.cx, y: m.cy, button: .left, clickCount: 2, bounds: bounds)
         case .rightClick(let x, let y):
-            return click(x: x, y: y, button: .right, clickCount: 1)
+            return click(x: x, y: y, button: .right, clickCount: 1, bounds: bounds)
         case .rightClickMark(let id):
             guard let m = mark(id, marks) else { return false }
-            return click(x: m.cx, y: m.cy, button: .right, clickCount: 1)
+            return click(x: m.cx, y: m.cy, button: .right, clickCount: 1, bounds: bounds)
         case .longPress(let x, let y, let durationMs):
-            return await hold(x: x, y: y, durationMs: durationMs)
+            return await hold(x: x, y: y, durationMs: durationMs, bounds: bounds)
         case .longPressMark(let id, let durationMs):
             guard let m = mark(id, marks) else { return false }
-            return await hold(x: m.cx, y: m.cy, durationMs: durationMs)
+            return await hold(x: m.cx, y: m.cy, durationMs: durationMs, bounds: bounds)
         case .swipe(let x1, let y1, let x2, let y2, let durationMs):
-            return await drag(x1: x1, y1: y1, x2: x2, y2: y2, durationMs: durationMs)
+            return await drag(x1: x1, y1: y1, x2: x2, y2: y2, durationMs: durationMs, bounds: bounds)
         case .scroll(let x, let y, let deltaX, let deltaY):
-            return scroll(x: x, y: y, deltaX: deltaX, deltaY: deltaY)
+            return scroll(x: x, y: y, deltaX: deltaX, deltaY: deltaY, bounds: bounds)
         case .typeText(let text, let submit):
             return await typeText(text, submit: submit)
         case .keyPress(let keys):
@@ -67,15 +73,14 @@ final class ActionDispatcher {
         return m
     }
 
-    private func inBounds(_ x: Int, _ y: Int) -> Bool {
-        let b = screenBounds()
-        return CGFloat(x) >= b.minX && CGFloat(x) < b.maxX && CGFloat(y) >= b.minY && CGFloat(y) < b.maxY
+    private func inBounds(_ x: Int, _ y: Int, _ bounds: CGRect) -> Bool {
+        CGFloat(x) >= bounds.minX && CGFloat(x) < bounds.maxX && CGFloat(y) >= bounds.minY && CGFloat(y) < bounds.maxY
     }
 
     // MARK: - Mouse
 
-    private func click(x: Int, y: Int, button: CGMouseButton, clickCount: Int64) -> Bool {
-        guard inBounds(x, y) else {
+    private func click(x: Int, y: Int, button: CGMouseButton, clickCount: Int64, bounds: CGRect) -> Bool {
+        guard inBounds(x, y, bounds) else {
             Logger.w("Skipping out-of-bounds click (\(x),\(y))")
             return false
         }
@@ -98,8 +103,8 @@ final class ActionDispatcher {
         return true
     }
 
-    private func hold(x: Int, y: Int, durationMs: Int) async -> Bool {
-        guard inBounds(x, y) else {
+    private func hold(x: Int, y: Int, durationMs: Int, bounds: CGRect) async -> Bool {
+        guard inBounds(x, y, bounds) else {
             Logger.w("Skipping out-of-bounds long-press (\(x),\(y))")
             return false
         }
@@ -113,8 +118,8 @@ final class ActionDispatcher {
         return true
     }
 
-    private func drag(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) async -> Bool {
-        guard inBounds(x1, y1), inBounds(x2, y2) else {
+    private func drag(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int, bounds: CGRect) async -> Bool {
+        guard inBounds(x1, y1, bounds), inBounds(x2, y2, bounds) else {
             Logger.w("Skipping out-of-bounds drag")
             return false
         }
@@ -146,8 +151,8 @@ final class ActionDispatcher {
         return true
     }
 
-    private func scroll(x: Int, y: Int, deltaX: Int, deltaY: Int) -> Bool {
-        guard inBounds(x, y) else {
+    private func scroll(x: Int, y: Int, deltaX: Int, deltaY: Int, bounds: CGRect) -> Bool {
+        guard inBounds(x, y, bounds) else {
             Logger.w("Skipping out-of-bounds scroll (\(x),\(y))")
             return false
         }
@@ -172,7 +177,7 @@ final class ActionDispatcher {
             ok = AccessibilityReader.setValue(element, text: text)
         }
         if !ok {
-            activateTargetIfNeeded()
+            await activateTargetIfNeeded()
             ok = postUnicodeString(text)
         }
         if ok && submit {
@@ -181,9 +186,14 @@ final class ActionDispatcher {
         return ok
     }
 
-    private func activateTargetIfNeeded() {
-        guard let pid = targetPID(), let app = NSRunningApplication(processIdentifier: pid) else { return }
-        app.activate()
+    private func activateTargetIfNeeded() async {
+        guard let pid = targetPID else { return }
+        // NSRunningApplication is an AppKit type -- hop to the main actor
+        // rather than calling it from whatever executor DecisionLoop's
+        // actor happens to be running on.
+        await MainActor.run {
+            NSRunningApplication(processIdentifier: pid)?.activate()
+        }
     }
 
     /// Layout-independent text synthesis -- avoids per-character keycode
