@@ -31,16 +31,19 @@ enum AccessibilityReader {
     static let maxNodes = 80
     static let traversalBudget: TimeInterval = 1.5
 
+    // Literal role strings rather than the kAX*Role globals -- not all of
+    // them (e.g. kAXLinkRole) are actually exposed by the ApplicationServices
+    // Swift overlay, so this sidesteps that inconsistency entirely.
     private static let clickableRoles: Set<String> = [
-        kAXButtonRole as String,
-        kAXCheckBoxRole as String,
-        kAXRadioButtonRole as String,
-        kAXPopUpButtonRole as String,
-        kAXMenuItemRole as String,
-        kAXLinkRole as String,
-        kAXTextFieldRole as String,
-        kAXComboBoxRole as String,
-        kAXSliderRole as String
+        "AXButton",
+        "AXCheckBox",
+        "AXRadioButton",
+        "AXPopUpButton",
+        "AXMenuItem",
+        "AXLink",
+        "AXTextField",
+        "AXComboBox",
+        "AXSlider"
     ]
 
     static func isTrusted(promptIfNeeded: Bool = false) -> Bool {
@@ -68,7 +71,10 @@ enum AccessibilityReader {
         var value: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &value)
         guard err == .success, let value else { return nil }
-        return (value as? AXUIElement)
+        // Plain `as`, not `as?`/`as!` -- the compiler treats a CFTypeRef ->
+        // AXUIElement downcast as statically infallible and errors on the
+        // conditional/forced forms as redundant.
+        return (value as AXUIElement)
     }
 
     static func setValue(_ element: AXUIElement, text: String) -> Bool {
@@ -144,12 +150,15 @@ enum AccessibilityReader {
         var sizeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success,
               AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
-              let posAXValue = posValue as? AXValue,
-              let sizeAXValue = sizeValue as? AXValue
+              let posValue, let sizeValue
         else { return nil }
 
-        // Position/size come wrapped in AXValue -- a raw cast silently
-        // fails, must unwrap via AXValueGetValue.
+        // Plain `as`, not `as?` -- same CFTypeRef-downcast-is-infallible
+        // reasoning as focusedEditableElement() above. Position/size come
+        // wrapped in AXValue -- a raw cast to CGPoint/CGSize would silently
+        // fail, must unwrap via AXValueGetValue instead.
+        let posAXValue = posValue as AXValue
+        let sizeAXValue = sizeValue as AXValue
         var point = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(posAXValue, .cgPoint, &point),

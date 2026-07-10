@@ -36,7 +36,9 @@ enum OcrEngine {
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         try handler.perform([request])
 
-        let observations = (request.results as? [VNRecognizedTextObservation]) ?? []
+        // request.results is already typed [VNRecognizedTextObservation]?
+        // for this request subclass -- no cast needed.
+        let observations = request.results ?? []
         var lines: [String] = []
         var boxes: [OcrLine] = []
         for observation in observations {

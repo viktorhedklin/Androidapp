@@ -191,7 +191,7 @@ final class ActionDispatcher {
         // NSRunningApplication is an AppKit type -- hop to the main actor
         // rather than calling it from whatever executor DecisionLoop's
         // actor happens to be running on.
-        await MainActor.run {
+        _ = await MainActor.run {
             NSRunningApplication(processIdentifier: pid)?.activate()
         }
     }

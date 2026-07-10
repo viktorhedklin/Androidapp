@@ -89,7 +89,7 @@ actor ScreenCapture {
         // Default output size does NOT auto-match the window/display --
         // must set explicitly (accounting for Retina backing scale) or
         // frames come back downscaled, hurting OCR/mark accuracy.
-        let scale = filter.pointPixelScale
+        let scale = CGFloat(filter.pointPixelScale)
         config.width = max(1, Int((filter.contentRect.width * scale).rounded()))
         config.height = max(1, Int((filter.contentRect.height * scale).rounded()))
 
