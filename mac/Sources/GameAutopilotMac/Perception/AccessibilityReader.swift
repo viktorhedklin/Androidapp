@@ -71,10 +71,11 @@ enum AccessibilityReader {
         var value: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &value)
         guard err == .success, let value else { return nil }
-        // Plain `as`, not `as?`/`as!` -- the compiler treats a CFTypeRef ->
-        // AXUIElement downcast as statically infallible and errors on the
-        // conditional/forced forms as redundant.
-        return (value as AXUIElement)
+        // Force downcast: `as?` here got flagged as "always succeeds" (Swift
+        // can't statically fail a CFTypeRef -> AXUIElement conditional cast),
+        // but plain `as` isn't valid Swift for a downcast either -- `as!` is
+        // what the compiler actually wants.
+        return (value as! AXUIElement)
     }
 
     static func setValue(_ element: AXUIElement, text: String) -> Bool {
@@ -153,12 +154,12 @@ enum AccessibilityReader {
               let posValue, let sizeValue
         else { return nil }
 
-        // Plain `as`, not `as?` -- same CFTypeRef-downcast-is-infallible
-        // reasoning as focusedEditableElement() above. Position/size come
-        // wrapped in AXValue -- a raw cast to CGPoint/CGSize would silently
-        // fail, must unwrap via AXValueGetValue instead.
-        let posAXValue = posValue as AXValue
-        let sizeAXValue = sizeValue as AXValue
+        // Force downcast -- same reasoning as focusedEditableElement()
+        // above. Position/size come wrapped in AXValue -- a raw cast to
+        // CGPoint/CGSize would silently fail, must unwrap via
+        // AXValueGetValue instead.
+        let posAXValue = posValue as! AXValue
+        let sizeAXValue = sizeValue as! AXValue
         var point = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(posAXValue, .cgPoint, &point),
