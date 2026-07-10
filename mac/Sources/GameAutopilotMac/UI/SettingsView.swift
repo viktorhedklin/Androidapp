@@ -97,6 +97,14 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(width: 360)
+        .onAppear {
+            // Accessory apps (LSUIElement=true) don't reliably gain key
+            // focus for secondary Window scenes opened from a
+            // MenuBarExtra -- clicks land but the window never becomes
+            // key, so text fields look unresponsive/the window looks
+            // like it "closes." Force activation explicitly.
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     /// Only flips defaults when the user hasn't customized them yet --

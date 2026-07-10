@@ -102,7 +102,12 @@ struct TargetSetupView: View {
         }
         .padding(16)
         .frame(width: 380)
-        .onAppear { loadPending() }
+        .onAppear {
+            loadPending()
+            // See SettingsView.swift -- accessory apps need an explicit
+            // activate() or secondary Window scenes never become key.
+            NSApp.activate(ignoringOtherApps: true)
+        }
         .onDisappear { researchTask?.cancel() }
     }
 

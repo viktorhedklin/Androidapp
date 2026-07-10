@@ -85,6 +85,11 @@ struct TargetPickerView: View {
         .padding(16)
         .frame(width: 380)
         .task { await loadTargets() }
+        .onAppear {
+            // See SettingsView.swift -- accessory apps need an explicit
+            // activate() or secondary Window scenes never become key.
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func loadTargets() async {

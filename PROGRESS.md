@@ -471,3 +471,36 @@ PID used to. Not touched here since it wasn't part of what was reviewed/
 approved; likely graceful-degrades to empty a11y marks for a tick (OCR
 still works) rather than crashing, but worth fixing in a follow-up if it
 turns out to matter in practice.
+
+---
+
+## Fix: Settings/target windows losing focus on real hardware (2026-07-10)
+
+User reported on real hardware, after the `.sheet()`→`Window` fix from
+the previous round: "still cant press the menu, it minimize when trying
+to add the api." Different symptom from the original bug (that one was
+the whole popover auto-dismissing on outside clicks; this is the
+secondary `Window` itself never becoming key).
+
+Root cause: this app is `LSUIElement=true` (accessory app, no Dock icon,
+no icon to click to reactivate). Accessory apps on macOS don't reliably
+get frontmost/key-window status for a `Window` scene opened via
+`openWindow(id:)` from a `MenuBarExtra` — the window can appear behind
+or simply never accept keyboard/click focus, which reads as it
+"minimizing" the moment you try to type.
+
+Fix: added `.onAppear { NSApp.activate(ignoringOtherApps: true) }` to
+all three secondary `Window`-scene views —
+`UI/SettingsView.swift`, `UI/TargetPickerView.swift`,
+`UI/TargetSetupView.swift` (folded into its existing `.onAppear` next to
+`loadPending()`). Forces the app to the front and grabs key status
+explicitly instead of relying on the default accessory-app activation
+behavior. `NSApp`/`NSApplication` resolve without an explicit
+`import AppKit`, consistent with the existing `NSApplication.shared`
+call already in `UI/MenuBarView.swift` — SwiftUI re-exports AppKit on
+macOS.
+
+Still device-unverified by me (no macOS toolchain in this sandbox) —
+needs a real-hardware retest: open Settings from the menu bar, click
+into the API key field, confirm the window stays focused and typing
+works, then repeat for "Pick target..." and "Edit setup...".
