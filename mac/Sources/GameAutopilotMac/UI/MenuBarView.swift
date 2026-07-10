@@ -4,12 +4,13 @@ import SwiftUI
 /// Stop, settings. Mirrors the Android overlay control chip + Settings/
 /// AddGame screens folded into one compact view, matching the "menu bar
 /// utility, not a full app" v1 scope decision.
+///
+/// Settings/target picking open as real windows (see App.swift) rather
+/// than .sheet()s, so they don't get caught up in the MenuBarExtra
+/// popover's own auto-dismiss-on-outside-click behavior.
 struct MenuBarView: View {
     @EnvironmentObject private var controller: AutopilotController
-    @State private var showingTargetPicker = false
-    @State private var showingSettings = false
-    @State private var apiKey: String = Keychain.get() ?? ""
-    @State private var prompt: String = ""
+    @Environment(\.openWindow) private var openWindow
     @State private var showResetMemoryConfirm = false
 
     var body: some View {
@@ -29,22 +30,13 @@ struct MenuBarView: View {
 
             Divider()
             HStack {
-                Button("Settings...") { showingSettings = true }
+                Button("Settings...") { openWindow(id: "settings") }
                 Spacer()
                 Button("Quit App") { NSApplication.shared.terminate(nil) }
             }
         }
         .padding(12)
         .frame(width: 300)
-        .sheet(isPresented: $showingTargetPicker) {
-            TargetPickerView(prompt: $prompt) { target in
-                controller.selectTarget(target, prompt: prompt)
-                showingTargetPicker = false
-            }
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(apiKey: $apiKey)
-        }
         .alert("Reset memory?", isPresented: $showResetMemoryConfirm) {
             Button("Reset", role: .destructive) {
                 if let bundleID = controller.currentTarget?.bundleIdentifier {
@@ -67,12 +59,12 @@ struct MenuBarView: View {
                 }
             }
             HStack {
-                Button("Change target...") { showingTargetPicker = true }
+                Button("Change target...") { openWindow(id: "targetPicker") }
                 Button("Reset memory") { showResetMemoryConfirm = true }
             }
         } else {
             Text("No target selected").foregroundStyle(.secondary)
-            Button("Pick target...") { showingTargetPicker = true }
+            Button("Pick target...") { openWindow(id: "targetPicker") }
         }
     }
 
@@ -90,8 +82,8 @@ struct MenuBarView: View {
             if isRunning {
                 Button("Stop") { controller.stop() }
             } else {
-                Button("Start") { _ = controller.start(apiKey: apiKey) }
-                    .disabled(controller.currentTarget == nil || apiKey.isEmpty)
+                Button("Start") { _ = controller.start(apiKey: Keychain.get() ?? "") }
+                    .disabled(controller.currentTarget == nil || !Keychain.hasValue())
             }
             Spacer()
             if controller.currentTarget != nil {

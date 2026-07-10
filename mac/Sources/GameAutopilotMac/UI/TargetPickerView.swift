@@ -1,16 +1,17 @@
 import SwiftUI
 
 /// Lists capturable windows and lets the user pick one as the autopilot
-/// target, plus an optional short prompt. Deliberately avoids List's
-/// built-in `selection:` binding (its binding type has to match the `id`
-/// keypath's type, not the element type, which is easy to get subtly
-/// wrong without being able to build and check it) -- rows are plain
-/// Buttons tracking a local `selected` value compared with `==` instead.
+/// target, plus an optional short prompt. Opened as a real Window (see
+/// App.swift) rather than a .sheet(). Deliberately avoids List's built-in
+/// `selection:` binding (its binding type has to match the `id` keypath's
+/// type, not the element type, which is easy to get subtly wrong without
+/// being able to build and check it) -- rows are plain Buttons tracking a
+/// local `selected` value compared with `==` instead.
 struct TargetPickerView: View {
-    @Binding var prompt: String
-    let onPick: (ScreenCapture.Target) -> Void
+    @EnvironmentObject private var controller: AutopilotController
+    @Environment(\.dismissWindow) private var dismissWindow
 
-    @Environment(\.dismiss) private var dismiss
+    @State private var prompt: String = ""
     @State private var targets: [ScreenCapture.Target] = []
     @State private var selected: ScreenCapture.Target?
     @State private var isLoading = true
@@ -62,11 +63,14 @@ struct TargetPickerView: View {
             }
 
             HStack {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { dismissWindow(id: "targetPicker") }
                 Spacer()
                 Button("Refresh") { Task { await loadTargets() } }
                 Button("Select") {
-                    if let selected { onPick(selected) }
+                    if let selected {
+                        controller.selectTarget(selected, prompt: prompt)
+                        dismissWindow(id: "targetPicker")
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selected == nil)

@@ -14,6 +14,24 @@ struct GameAutopilotMacApp: App {
                 .environmentObject(controller)
         }
         .menuBarExtraStyle(.window)
+
+        // Settings and the target picker are real windows, not .sheet()s
+        // presented from the MenuBarExtra popover -- a MenuBarExtra(.window)
+        // auto-dismisses on any click it considers "outside" itself, which
+        // in practice includes interacting with a sheet's own controls
+        // (typing in a field, opening a Picker). Independent Window scenes
+        // sidestep that entirely.
+        Window("Settings", id: "settings") {
+            SettingsView()
+                .environmentObject(controller)
+        }
+        .windowResizability(.contentSize)
+
+        Window("Pick Target", id: "targetPicker") {
+            TargetPickerView()
+                .environmentObject(controller)
+        }
+        .windowResizability(.contentSize)
     }
 
     private var statusIcon: String {

@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Provider + connection + safety settings. The API key is Keychain-backed
+/// Provider + connection + safety settings, opened as a real Window (see
+/// App.swift) rather than a .sheet(). The API key is Keychain-backed
 /// (Util/Keychain.swift) and never touches Settings/UserDefaults; the
 /// text field never echoes back a stored key, matching the Android
 /// Settings screen's "never echo back stored key" behavior.
 struct SettingsView: View {
-    @Binding var apiKey: String
     @EnvironmentObject private var controller: AutopilotController
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissWindow) private var dismissWindow
 
     @State private var provider: BrainProvider
     @State private var baseUrl: String
@@ -19,8 +19,7 @@ struct SettingsView: View {
     @State private var apiKeyInput: String = ""
     @State private var hasStoredKey: Bool
 
-    init(apiKey: Binding<String>) {
-        self._apiKey = apiKey
+    init() {
         let s = AutopilotController.shared.settingsStore.settings
         _provider = State(initialValue: s.provider)
         _baseUrl = State(initialValue: s.baseUrl)
@@ -53,7 +52,6 @@ struct SettingsView: View {
                     Button("Clear API key") {
                         Keychain.delete()
                         hasStoredKey = false
-                        apiKey = ""
                     }
                     .foregroundStyle(.red)
                 }
@@ -71,7 +69,7 @@ struct SettingsView: View {
             Toggle("Use set-of-marks prompting (recommended)", isOn: $useSetOfMarks)
 
             HStack {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { dismissWindow(id: "settings") }
                 Spacer()
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
@@ -97,7 +95,6 @@ struct SettingsView: View {
     private func save() {
         if !apiKeyInput.isEmpty {
             Keychain.set(apiKeyInput, account: "apiKey")
-            apiKey = apiKeyInput
             hasStoredKey = true
         }
         let merged = Settings(
@@ -110,6 +107,6 @@ struct SettingsView: View {
             tickIntervalMs: Int(tickIntervalMs) ?? 1500
         )
         controller.settingsStore.save(merged)
-        dismiss()
+        dismissWindow(id: "settings")
     }
 }
