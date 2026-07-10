@@ -8,10 +8,25 @@ import SwiftUI
 /// Settings/target picking/setup open as real windows (see App.swift)
 /// rather than .sheet()s, so they don't get caught up in the
 /// MenuBarExtra popover's own auto-dismiss-on-outside-click behavior.
+///
+/// The popover itself does NOT close automatically just because a
+/// button inside it opened a separate Window -- outside-click is the
+/// only thing that auto-dismisses it. Left alone, the popover and the
+/// new window are both open and fighting for key status, which reads as
+/// the new window immediately losing focus/"minimizing" the moment you
+/// interact with it. `openTarget(_:)` explicitly closes the popover
+/// (via the environment `dismiss` action) right after opening the real
+/// window, so only one of them is ever on screen at a time.
 struct MenuBarView: View {
     @EnvironmentObject private var controller: AutopilotController
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
     @State private var showResetMemoryConfirm = false
+
+    private func openTarget(_ id: String) {
+        openWindow(id: id)
+        dismiss()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -30,7 +45,7 @@ struct MenuBarView: View {
 
             Divider()
             HStack {
-                Button("Settings...") { openWindow(id: "settings") }
+                Button("Settings...") { openTarget("settings") }
                 Spacer()
                 Button("Quit App") { NSApplication.shared.terminate(nil) }
             }
@@ -62,16 +77,16 @@ struct MenuBarView: View {
                 }
             }
             HStack {
-                Button("Change target...") { openWindow(id: "targetPicker") }
+                Button("Change target...") { openTarget("targetPicker") }
                 Button("Edit setup...") {
                     controller.pendingSetupTarget = target
-                    openWindow(id: "targetSetup")
+                    openTarget("targetSetup")
                 }
                 Button("Reset memory") { showResetMemoryConfirm = true }
             }
         } else {
             Text("No target selected").foregroundStyle(.secondary)
-            Button("Pick target...") { openWindow(id: "targetPicker") }
+            Button("Pick target...") { openTarget("targetPicker") }
         }
     }
 

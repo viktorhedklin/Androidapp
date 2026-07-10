@@ -504,3 +504,29 @@ Still device-unverified by me (no macOS toolchain in this sandbox) —
 needs a real-hardware retest: open Settings from the menu bar, click
 into the API key field, confirm the window stays focused and typing
 works, then repeat for "Pick target..." and "Edit setup...".
+
+### Follow-up: `NSApp.activate()` alone wasn't the fix (2026-07-10)
+
+User retested and reported the same symptom persisting. Real root cause
+was different from what the `NSApp.activate()` change addressed: the
+`MenuBarExtra(.window)` popover only auto-dismisses on an *outside*
+click — clicking "Settings..." (a button inside the popover) opens the
+Settings `Window` but does **not** close the popover itself. So both the
+popover and the new window were open simultaneously, competing for key
+status; the moment the user clicked into the Settings window to type,
+the still-open popover (or the click landing on/near it) won the
+fight, and the new window appeared to vanish/"minimize."
+
+Fix: `UI/MenuBarView.swift` now holds `@Environment(\.dismiss)` and
+routes every window-opening button (`Settings...`, `Change target...`,
+`Pick target...`, `Edit setup...`) through a new `openTarget(_ id:)`
+helper that calls `openWindow(id:)` immediately followed by `dismiss()`
+— closing the MenuBarExtra popover explicitly the same way a real
+outside click would, so only the new window is left on screen instead
+of two top-level surfaces contending for focus. The `NSApp.activate()`
+calls from the previous fix stay in place as a secondary safeguard once
+only one window remains.
+
+Still device-unverified — same retest steps as above, this time also
+watching whether the popover itself visibly closes the instant the
+button is clicked.
