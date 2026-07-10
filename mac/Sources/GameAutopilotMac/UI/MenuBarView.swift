@@ -5,9 +5,9 @@ import SwiftUI
 /// AddGame screens folded into one compact view, matching the "menu bar
 /// utility, not a full app" v1 scope decision.
 ///
-/// Settings/target picking open as real windows (see App.swift) rather
-/// than .sheet()s, so they don't get caught up in the MenuBarExtra
-/// popover's own auto-dismiss-on-outside-click behavior.
+/// Settings/target picking/setup open as real windows (see App.swift)
+/// rather than .sheet()s, so they don't get caught up in the
+/// MenuBarExtra popover's own auto-dismiss-on-outside-click behavior.
 struct MenuBarView: View {
     @EnvironmentObject private var controller: AutopilotController
     @Environment(\.openWindow) private var openWindow
@@ -57,9 +57,16 @@ struct MenuBarView: View {
                 if let bundleID = target.bundleIdentifier {
                     Text(bundleID).font(.caption).foregroundStyle(.secondary)
                 }
+                if let profile = controller.currentProfile, !profile.userGoal.isEmpty {
+                    Text("Goal: \(profile.userGoal)").font(.caption).foregroundStyle(.secondary)
+                }
             }
             HStack {
                 Button("Change target...") { openWindow(id: "targetPicker") }
+                Button("Edit setup...") {
+                    controller.pendingSetupTarget = target
+                    openWindow(id: "targetSetup")
+                }
                 Button("Reset memory") { showResetMemoryConfirm = true }
             }
         } else {
@@ -107,6 +114,7 @@ struct MenuBarView: View {
             case .thinking: return .yellow
             case .acting: return .green
             case .error: return .red
+            case .completed: return .gray
             }
         case .error:
             return .red
@@ -115,8 +123,10 @@ struct MenuBarView: View {
 
     private var statusText: String {
         switch controller.state {
-        case .idle: return "Idle"
-        case .ready: return "Ready"
+        case .idle(let note):
+            return (note?.isEmpty == false) ? note! : "Idle"
+        case .ready:
+            return "Ready"
         case .running(let phase, let note):
             if let note, !note.isEmpty { return note }
             switch phase {
@@ -124,6 +134,7 @@ struct MenuBarView: View {
             case .thinking: return "Thinking..."
             case .acting: return "Acting"
             case .error: return "Error"
+            case .completed: return "Goal complete!"
             }
         case .error(let message):
             return message

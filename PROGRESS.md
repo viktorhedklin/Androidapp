@@ -339,3 +339,135 @@ Nothing further is planned server-side until that feedback loop happens.
   item.
 - Zero third-party SPM dependencies — everything used is a system
   framework.
+
+---
+
+## Intelligence upgrade (`mac/`) — done, device-unverified (2026-07-10)
+
+User asked for three things after the Mac app was building and running
+on real hardware: (1) pre-game research — type a name, AI confirms it
+understands the target before Start is ever pressed; (2) explicit goal
+specification, since "finish the full gameplay" and "spin slots to gain
+level" are behaviorally different, not just different text; (3) ad/
+interruption recovery — "get back to the game" if a click accidentally
+opens the App Store. User also asked for a specific process: **3 parallel
+agent reviews (2x opus, 1x haiku) + 1 QA pass (haiku), then user approval
+via ExitPlanMode, before any code** — all four ran against a design draft
+in the Claude-Code plan file before implementation started. That review
+process is what caught the real problems below; the first draft would
+have shipped a worse design.
+
+### What review caught (would have been wrong without it)
+
+- **Removing the frontmost-skip entirely (the naive fix) would have made
+  the bot fight the user for focus and burn paid API calls every tick
+  whenever they deliberately alt-tabbed away** — worse than the bug it
+  fixed. Fixed with bounded recovery: try for `interruptionRecoveryTicks`
+  (5) consecutive not-frontmost ticks, then back off to a 10x-interval
+  brain-free poll until frontmost naturally matches again.
+- **`keyPress` needed blocking alongside clicks when the target isn't
+  frontmost** — a CGEvent keyboard event goes to whichever app currently
+  has keyboard focus (the interrupter), not the blind target. A
+  "recovery" `keyPress(["cmd","w"])` would land on the wrong app. Only
+  `switchToTarget`/`wait`/`noop` pass through during a window-path
+  interruption (`Action.requiresTargetFrontmost`).
+- **The capture-blindness claim was path-dependent, not absolute**: true
+  for window-specific `SCContentFilter(desktopIndependentWindow:)`
+  capture (the screenshot is a stale/frozen buffer during a cross-app
+  redirect, genuinely invisible to the brain), but false for the
+  fullscreen `SCContentFilter(display:...)` fallback, which actually
+  shows the interrupter. Action-class filtering only applies on the
+  window path; display-path targets keep full freedom to visually
+  recover.
+- **`switchToTarget` needed to re-resolve by bundle identifier, not a
+  cached PID** — if the interruption killed/relaunched the target, a
+  cached `pid_t` goes stale and `NSRunningApplication(pid:)` silently
+  returns nil.
+- **The loop had no way to stop itself** — "finish the full gameplay"
+  wasn't actually implementable before this: the loop would finish the
+  game and then keep poking a completed screen forever. Added
+  `BrainDecision.goalComplete` (additive, same pattern as
+  `memoryUpdate`) + `TargetProfile.goalMode` (`.playUntilComplete` /
+  `.keepRunning`) + `LoopPhase.completed`, intercepted in
+  `AutopilotController.updatePhase` and turned into a terminal
+  `.idle(note: "Goal complete!")` rather than displayed as an ongoing
+  running phase.
+- **The original research design defaulted to requiring a second
+  (Gemini) API key for every user on OpenAI/NVIDIA** — flipped to:
+  research runs through whichever provider is already configured by
+  default (zero new keys, works universally, fine for any reasonably
+  known target), with Gemini `google_search` grounding as an **optional**
+  upgrade (separate Keychain slot `"researchApiKey"`) for live results.
+  Gemini's search tool and `responseMimeType: json` don't reliably
+  coexist, so `GameResearcher` asks for JSON in the prompt text and
+  parses leniently instead of using strict response mode.
+- **The original setup-wizard design was a multi-round chat** ("ask
+  until the model has no more questions") — UX review called this
+  over-built for a menu-bar utility and a scope-creep risk toward a
+  "chat app" the v1 decision deliberately avoided. Simplified to one
+  research pass → one consolidated (0-3) question list → Save, all of
+  it optional and skippable. **Known targets skip setup entirely** —
+  picking a target with an existing `TargetProfile` goes straight to
+  Start-ready, no re-interrogation (a real gap fixed along the way: the
+  prompt wasn't persisted *at all* before this batch).
+- **`TargetProfileStore` does NOT need `TargetMemoryStore`'s `NSLock`
+  pattern** — confirmed by both the risk review and the QA pass:
+  profiles are only ever read (`selectTarget`) and written
+  (`TargetSetupView`) from `@MainActor`, unlike memory, which is
+  genuinely written from `DecisionLoop`'s actor via `onMemoryUpdate`.
+  Copying the lock pattern here would have been unnecessary complexity
+  implying a requirement that doesn't exist.
+
+### New/changed files
+
+- `Research/GameResearcher.swift` (new) — one-shot research call, not
+  routed through the `Brain` protocol (structurally different from the
+  per-tick gameplay contract: no screenshot, no strict JSON mode).
+- `Core/TargetProfile.swift` (new) — `GoalMode` enum + `TargetProfile`
+  (no persisted Q&A transcript, just what feeds the prompt) +
+  `TargetProfileStore`.
+- `UI/TargetSetupView.swift` (new) — name/info/goal/goal-mode, optional
+  Research, optional consolidated questions, Save. Real `Window` scene
+  (`App.swift`), not `.sheet()`.
+- `Brain/Brain.swift` — `BrainContext.targetIsFrontmost` +
+  `BrainContext.goalMode`, `BrainDecision.goalComplete`. `BrainError`
+  gained `LocalizedError` conformance (a real bug: `CustomStringConvertible`
+  alone doesn't make `.localizedDescription` use `message`).
+- `Brain/BrainResponseParser.swift` — parses `goalComplete`.
+- `Action/Action.swift` — `switchToTarget` case +
+  `requiresTargetFrontmost` classification.
+- `Action/ActionDispatcher.swift` — `targetPID: pid_t?` replaced by
+  `targetBundleIdentifier: String?` throughout (fixes the staleness risk
+  for `typeText`'s existing activate-fallback too, not just the new
+  action); `switchToTarget` re-resolves via `NSWorkspace` each call.
+- `Core/DecisionLoop.swift` — bounded recovery/backoff, path-aware
+  action filtering, suppressed stuck-hash recording during window-path
+  interruption (a frozen buffer would otherwise trip the stuck breaker
+  before recovery gets a fair shot), `LoopPhase.completed` handling.
+- `Brain/PromptBuilder.swift` — `switchToTarget`/`goalComplete` in the
+  JSON schema, goal-mode-aware completion guidance, path-aware
+  interruption-recovery section.
+- `Core/AutopilotController.swift` — `selectTarget(_:profile:)` replaces
+  `selectTarget(_:prompt:)`; wires `TargetProfileStore`,
+  `pendingSetupTarget` hand-off slot, `updatePhase` intercepts
+  `.completed`.
+- `UI/MenuBarView.swift` — shows the saved goal + "Edit setup…" for a
+  known target; fixed a real display bug found while wiring this in
+  (`AutopilotState.idle(note:)`'s note was never actually shown —
+  `statusText`'s `.idle` case ignored it and always printed "Idle").
+- `UI/SettingsView.swift` — optional research-key field (separate
+  Keychain slot, own "Clear" button).
+- `UI/TargetPickerView.swift` — Select routes to
+  `controller.selectTarget` directly for a known target, or to
+  `TargetSetupView` via `pendingSetupTarget` for a new one.
+
+### Known limitation not fixed in this batch (scope discipline, not an oversight)
+
+`AutopilotController.buildSnapshot`'s AX reads use a `pid` captured once
+at `start()` time (closed over in the `takeSnapshot` closure), same as
+before this batch — if the target relaunches with a new PID mid-run,
+accessibility-tree reads go stale the same way `switchToTarget`'s cached
+PID used to. Not touched here since it wasn't part of what was reviewed/
+approved; likely graceful-degrades to empty a11y marks for a tick (OCR
+still works) rather than crashing, but worth fixing in a follow-up if it
+turns out to matter in practice.

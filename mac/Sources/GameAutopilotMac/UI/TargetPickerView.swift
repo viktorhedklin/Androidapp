@@ -1,17 +1,21 @@
 import SwiftUI
 
 /// Lists capturable windows and lets the user pick one as the autopilot
-/// target, plus an optional short prompt. Opened as a real Window (see
-/// App.swift) rather than a .sheet(). Deliberately avoids List's built-in
-/// `selection:` binding (its binding type has to match the `id` keypath's
-/// type, not the element type, which is easy to get subtly wrong without
-/// being able to build and check it) -- rows are plain Buttons tracking a
-/// local `selected` value compared with `==` instead.
+/// target. Opened as a real Window (see App.swift) rather than a
+/// .sheet(). Deliberately avoids List's built-in `selection:` binding
+/// (its binding type has to match the `id` keypath's type, not the
+/// element type, which is easy to get subtly wrong without being able to
+/// build and check it) -- rows are plain Buttons tracking a local
+/// `selected` value compared with `==` instead.
+///
+/// Selecting a target with an existing TargetProfile goes straight to
+/// AutopilotController.selectTarget -- no re-setup. A brand-new target
+/// routes to TargetSetupView instead (see Select's action below).
 struct TargetPickerView: View {
     @EnvironmentObject private var controller: AutopilotController
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
 
-    @State private var prompt: String = ""
     @State private var targets: [ScreenCapture.Target] = []
     @State private var selected: ScreenCapture.Target?
     @State private var isLoading = true
@@ -56,10 +60,6 @@ struct TargetPickerView: View {
                     .buttonStyle(.plain)
                 }
                 .frame(height: 220)
-
-                TextField("What should the AI do? (optional)", text: $prompt, axis: .vertical)
-                    .lineLimit(3...6)
-                    .textFieldStyle(.roundedBorder)
             }
 
             HStack {
@@ -67,10 +67,16 @@ struct TargetPickerView: View {
                 Spacer()
                 Button("Refresh") { Task { await loadTargets() } }
                 Button("Select") {
-                    if let selected {
-                        controller.selectTarget(selected, prompt: prompt)
-                        dismissWindow(id: "targetPicker")
+                    guard let selected else { return }
+                    if let bundleID = selected.bundleIdentifier,
+                       let profile = controller.profileStore.get(bundleID) {
+                        // Known target -- skip setup entirely, straight to Start-ready.
+                        controller.selectTarget(selected, profile: profile)
+                    } else {
+                        controller.pendingSetupTarget = selected
+                        openWindow(id: "targetSetup")
                     }
+                    dismissWindow(id: "targetPicker")
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selected == nil)

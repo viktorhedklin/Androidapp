@@ -14,6 +14,8 @@ enum PromptBuilder {
         TARGET-SPECIFIC GUIDANCE:
         \(ctx.targetPrompt.isEmpty ? "(none — be conservative)" : ctx.targetPrompt)
 
+        GOAL MODE: \(goalModeDescription(ctx.goalMode))
+
         EACH TURN YOU RECEIVE:
         - a SCREENSHOT of the target window/display with numbered green rectangles drawn on top
           (set of marks). Each numbered box is a candidate target.
@@ -24,6 +26,7 @@ enum PromptBuilder {
           screenshot and OCR marks when that happens),
         - the screen size (width x height pixels),
         - your last few actions,
+        - whether the target is currently the frontmost (focused) app,
         - your own MEMORY notes from previous turns -- the only thing that survives
           between turns besides the screen itself.
 
@@ -42,11 +45,13 @@ enum PromptBuilder {
             or {"type":"scroll","x":<int>,"y":<int>,"deltaX":<int>,"deltaY":<int>}                <-- scroll wheel
             or {"type":"typeText","text":"...","submit":<bool>}
             or {"type":"keyPress","keys":["cmd","w"]}                     <-- see key names below
+            or {"type":"switchToTarget"}                                  <-- see INTERRUPTIONS below
             or {"type":"wait","ms":<int>}
             or {"type":"noop"}
           ],
           "confidence": <0.0-1.0>,
-          "memory": "<optional -- updated notes to remember next turn>"
+          "memory": "<optional -- updated notes to remember next turn>",
+          "goalComplete": <optional bool -- see GOAL MODE above, only ever true for "play until complete" targets>
         }
 
         KEY NAMES for keyPress (macOS has no hardware Back button -- use this instead):
@@ -54,6 +59,25 @@ enum PromptBuilder {
         delete, up, down, left, right, f1-f20. else a literal single character.
         Example, dismiss a dialog: {"type":"keyPress","keys":["escape"]}
         Example, close a window: {"type":"keyPress","keys":["cmd","w"]}
+
+        INTERRUPTIONS (ads, accidental navigation to the App Store/a browser/etc.):
+        - An ad or overlay rendered INSIDE this screenshot (a video ad, a "no thanks"
+          banner) is something you can see and act on normally -- look for a skip/X
+          button, which sometimes only appears after a short countdown; use "wait" if
+          you see a countdown and no button yet, don't guess-tap near where you think
+          one might appear.
+        - If "target frontmost" says NO, a click accidentally opened a different app
+          entirely (e.g. the App Store). On some targets the screenshot you're looking
+          at in this state may be STALE -- it can keep showing the target's last-known
+          content even though a different app is actually focused, because window
+          capture doesn't see what's on top of it. When frontmost is NO, trust that
+          signal over the screenshot: use {"type":"switchToTarget"} to return to the
+          target rather than trying to click your way back through what you see.
+          Coordinate/keyboard actions may be silently rejected while frontmost is NO --
+          this is expected, not a bug; switchToTarget/wait/noop always work.
+        - Recovery is attempted for a limited number of turns before the app backs off
+          and waits quietly -- if you can't recover within a few tries, stop trying
+          every turn; a "wait" is fine.
 
         RULES:
         - Prefer the *Mark actions over raw coordinates whenever a mark covers your target.
@@ -89,6 +113,7 @@ enum PromptBuilder {
 
         return """
         Screen size: \(ctx.screenWidth)x\(ctx.screenHeight)
+        Target frontmost: \(ctx.targetIsFrontmost ? "YES" : "NO")
         Recent actions: \(recent.isEmpty ? "(none)" : recent)
         \(stuck)
         MEMORY (your notes from previous turns):
@@ -103,5 +128,23 @@ enum PromptBuilder {
         Accessibility elements:
         \(a11y.isEmpty ? "(none)" : a11y)
         """
+    }
+
+    private static func goalModeDescription(_ mode: GoalMode) -> String {
+        switch mode {
+        case .playUntilComplete:
+            return """
+            This target has a finish line. Once you're confident the goal described \
+            above has genuinely been reached (e.g. credits, a "complete" screen, a \
+            final score/summary), set "goalComplete": true and the app will stop. \
+            Don't guess early -- only set it when the evidence on screen is clear.
+            """
+        case .keepRunning:
+            return """
+            This target is open-ended (e.g. a grind/idle goal) and has no finish line. \
+            Never set "goalComplete" -- there is no "done" state; keep working toward \
+            the goal above until the user stops the app manually.
+            """
+        }
     }
 }

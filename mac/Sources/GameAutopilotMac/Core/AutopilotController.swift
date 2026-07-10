@@ -9,8 +9,8 @@ enum AutopilotState: Equatable {
     case error(message: String)
 }
 
-/// Singleton orchestrator -- owns settings, capture, memory, the active
-/// decision loop, and the state SwiftUI observes. Mirrors
+/// Singleton orchestrator -- owns settings, capture, memory, profiles,
+/// the active decision loop, and the state SwiftUI observes. Mirrors
 /// core/AutopilotController.kt.
 ///
 /// State-mutating methods are @MainActor (SwiftUI/@Published requires
@@ -22,15 +22,21 @@ final class AutopilotController: ObservableObject {
 
     @Published private(set) var state: AutopilotState = .idle(note: nil)
     @Published private(set) var currentTarget: ScreenCapture.Target?
+    @Published private(set) var currentProfile: TargetProfile?
+    /// Transient hand-off slot: set right before opening the "targetSetup"
+    /// Window scene so TargetSetupView knows which target it's setting up
+    /// -- plain SwiftUI Window scenes have no built-in way to pass a value
+    /// in, so this small piece of shared state fills that gap.
+    @Published var pendingSetupTarget: ScreenCapture.Target?
 
     let settingsStore = SettingsStore()
+    let profileStore = TargetProfileStore()
     private let capture = ScreenCapture()
     private let memoryStore = TargetMemoryStore()
     private let recent = ActionRing()
     private lazy var rate = RateLimiter(maxPerMinute: settingsStore.settings.maxActionsPerMinute)
 
     private var targetPID: pid_t?
-    private var targetPrompt: String = ""
     private var loop: DecisionLoop?
     private var loopTask: Task<Void, Never>?
 
@@ -39,9 +45,9 @@ final class AutopilotController: ObservableObject {
     // MARK: - Target selection
 
     @MainActor
-    func selectTarget(_ target: ScreenCapture.Target, prompt: String) {
+    func selectTarget(_ target: ScreenCapture.Target, profile: TargetProfile) {
         currentTarget = target
-        targetPrompt = prompt
+        currentProfile = profile
         targetPID = target.bundleIdentifier.flatMap { bundleID in
             NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleID }?.processIdentifier
         }
@@ -67,7 +73,7 @@ final class AutopilotController: ObservableObject {
     @discardableResult
     @MainActor
     func start(apiKey: String) -> Bool {
-        guard let target = currentTarget else {
+        guard let target = currentTarget, let profile = currentProfile else {
             state = .error(message: "No target selected")
             return false
         }
@@ -90,9 +96,14 @@ final class AutopilotController: ObservableObject {
         let brain = BrainFactory.create(settings: settings, apiKey: apiKey)
         let bundleID = target.bundleIdentifier ?? ""
         let initialMemory = memoryStore.get(bundleID)
-        let dispatcher = ActionDispatcher(targetPID: targetPID)
+        let dispatcher = ActionDispatcher(targetBundleIdentifier: target.bundleIdentifier)
         let useMarks = settings.useSetOfMarks
         let pid = targetPID
+        // Fullscreen targets fall back to display-based capture (see
+        // ScreenCapture.captureImage), which genuinely shows whatever's on
+        // screen including an interrupter; only window-path targets have
+        // the stale/frozen-buffer blind spot DecisionLoop guards against.
+        let isWindowPathCapture = target.windowID != nil
 
         let newLoop = DecisionLoop(
             takeSnapshot: { [weak self] in await self?.buildSnapshot(useMarks: useMarks, pid: pid) },
@@ -101,10 +112,12 @@ final class AutopilotController: ObservableObject {
             recent: recent,
             rate: rate,
             baseTickIntervalMs: settings.tickIntervalMs,
-            targetName: target.title,
+            targetName: profile.displayName,
             targetBundleIdentifier: bundleID,
-            targetPrompt: targetPrompt,
+            targetPrompt: profile.composedPrompt,
+            goalMode: profile.goalMode,
             onlyActOnTarget: settings.onlyActOnTarget,
+            isWindowPathCapture: isWindowPathCapture,
             initialMemory: initialMemory,
             onMemoryUpdate: { [weak self] text in
                 self?.memoryStore.set(bundleID, text: text)
@@ -120,9 +133,10 @@ final class AutopilotController: ObservableObject {
             while true {
                 guard let self, !Task.isCancelled else { break }
                 // `loop` is only ever written from @MainActor methods
-                // (start/stop/quit) -- read it the same way rather than
-                // relying on this Task's inherited isolation, which is
-                // harder to reason about with the [weak self] capture.
+                // (start/stop/quit/updatePhase) -- read it the same way
+                // rather than relying on this Task's inherited isolation,
+                // which is harder to reason about with the [weak self]
+                // capture.
                 let currentLoop: DecisionLoop? = await MainActor.run { self.loop }
                 guard let currentLoop else { break }
                 let delayMs = await currentLoop.tick()
@@ -130,7 +144,7 @@ final class AutopilotController: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(max(50, delayMs)) * 1_000_000)
             }
         }
-        Logger.i("Autopilot started for \(target.title)")
+        Logger.i("Autopilot started for \(profile.displayName)")
         return true
     }
 
@@ -148,6 +162,7 @@ final class AutopilotController: ObservableObject {
         stop()
         Task { await capture.clearTarget() }
         currentTarget = nil
+        currentProfile = nil
         targetPID = nil
         state = .idle(note: nil)
         recent.clear()
@@ -156,6 +171,19 @@ final class AutopilotController: ObservableObject {
 
     @MainActor
     private func updatePhase(_ phase: LoopPhase, _ note: String?) {
+        if phase == .completed {
+            // Brain-reported goal completion (.playUntilComplete targets
+            // only, see DecisionLoop/PromptBuilder) -- tear the loop down
+            // the same way stop() does, but land on a distinct message
+            // instead of a bare "Ready" so the user actually sees it
+            // completed rather than it silently reverting to idle.
+            loopTask?.cancel()
+            loopTask = nil
+            loop = nil
+            state = .idle(note: note ?? "Goal complete!")
+            Logger.i("Autopilot completed its goal")
+            return
+        }
         if case .running = state {
             state = .running(phase: phase, note: note)
         }

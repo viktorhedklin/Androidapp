@@ -15,13 +15,19 @@ import Foundation
 /// DecisionLoop's actor context on a different executor than whatever
 /// last updated a "current bounds" var would run on, so a closure over
 /// shared mutable state here would be a real data race, not just a
-/// theoretical one. `targetPID` is fixed at init time (a run's target
-/// doesn't change mid-loop) so it's safe as a plain `let`.
+/// theoretical one.
+///
+/// Target activation resolves by **bundle identifier**, not a cached
+/// PID: if an interruption killed/relaunched the target, a PID captured
+/// at selectTarget() time would be stale and NSRunningApplication(pid:)
+/// would silently return nil, making recovery silently fail. Re-resolving
+/// by bundle identifier at activation time costs one more lookup but
+/// stays correct across a relaunch.
 final class ActionDispatcher {
-    private let targetPID: pid_t?
+    private let targetBundleIdentifier: String?
 
-    init(targetPID: pid_t?) {
-        self.targetPID = targetPID
+    init(targetBundleIdentifier: String?) {
+        self.targetBundleIdentifier = targetBundleIdentifier
     }
 
     @discardableResult
@@ -55,6 +61,8 @@ final class ActionDispatcher {
             return await typeText(text, submit: submit)
         case .keyPress(let keys):
             return keyPress(keys)
+        case .switchToTarget:
+            return await switchToTarget()
         case .wait(let ms):
             try? await Task.sleep(nanoseconds: UInt64(max(0, ms)) * 1_000_000)
             return true
@@ -187,12 +195,35 @@ final class ActionDispatcher {
     }
 
     private func activateTargetIfNeeded() async {
-        guard let pid = targetPID else { return }
-        // NSRunningApplication is an AppKit type -- hop to the main actor
-        // rather than calling it from whatever executor DecisionLoop's
-        // actor happens to be running on.
-        _ = await MainActor.run {
-            NSRunningApplication(processIdentifier: pid)?.activate()
+        _ = await switchToTarget()
+    }
+
+    /// Coordinate-free recovery: bring the target app to the foreground
+    /// by bundle identifier, re-resolving its running instance each call
+    /// (see the class doc comment for why not a cached PID). Distinct
+    /// log messages for "not running at all" vs "running but activate()
+    /// declined" -- the risk review flagged that lumping these together
+    /// under the same "action failed" signal makes it hard to tell a
+    /// dead target from a merely-stubborn one when debugging.
+    @discardableResult
+    private func switchToTarget() async -> Bool {
+        guard let bundleID = targetBundleIdentifier else {
+            Logger.w("switchToTarget: no target bundle identifier configured")
+            return false
+        }
+        // NSWorkspace/NSRunningApplication are AppKit types -- hop to the
+        // main actor rather than calling them from whatever executor
+        // DecisionLoop's actor happens to be running on.
+        return await MainActor.run {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
+                Logger.w("switchToTarget: \(bundleID) is not currently running (quit or not yet relaunched)")
+                return false
+            }
+            let activated = app.activate()
+            if !activated {
+                Logger.w("switchToTarget: \(bundleID) is running but activate() declined")
+            }
+            return activated
         }
     }
 

@@ -20,8 +20,26 @@ enum Action: Equatable {
     case scroll(x: Int, y: Int, deltaX: Int, deltaY: Int)
     case typeText(text: String, submit: Bool)
     case keyPress(keys: [String])
+    /// Coordinate-free recovery action: re-activates the target app by
+    /// bundle identifier. The only way to "go back" when a different app
+    /// is frontmost -- clicks/keystrokes would land on whatever app
+    /// currently owns the screen/keyboard focus, not the target.
+    case switchToTarget
     case wait(ms: Int)
     case noop
+
+    /// False for the handful of actions that are safe to dispatch even
+    /// when the target isn't frontmost (they don't depend on the target
+    /// owning screen/keyboard focus). Used by DecisionLoop to filter the
+    /// action set during a window-path interruption, where the brain is
+    /// reasoning from a stale/frozen screenshot and has no reliable way
+    /// to know what a click or keystroke would actually land on.
+    var requiresTargetFrontmost: Bool {
+        switch self {
+        case .switchToTarget, .wait, .noop: return false
+        default: return true
+        }
+    }
 
     var shortLabel: String {
         switch self {
@@ -37,6 +55,7 @@ enum Action: Equatable {
         case .scroll(let x, let y, let dx, let dy): return "scroll(\(x),\(y),dx=\(dx),dy=\(dy))"
         case .typeText(let text, let submit): return "type(\(text.prefix(20))\(submit ? "+return" : ""))"
         case .keyPress(let keys): return "key(\(keys.joined(separator: "+")))"
+        case .switchToTarget: return "switchToTarget"
         case .wait(let ms): return "wait(\(ms)ms)"
         case .noop: return "noop"
         }
@@ -99,6 +118,8 @@ enum Action: Equatable {
         case "keypress", "key_press", "key":
             let keys = (obj["keys"] as? [String]) ?? []
             return keys.isEmpty ? nil : .keyPress(keys: keys.map { $0.lowercased() })
+        case "switchtotarget", "switch_to_target":
+            return .switchToTarget
         case "wait":
             return .wait(ms: min(max(int("ms", 500), 0), 60_000))
         case "noop", "":

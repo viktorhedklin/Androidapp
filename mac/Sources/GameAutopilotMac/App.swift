@@ -32,6 +32,12 @@ struct GameAutopilotMacApp: App {
                 .environmentObject(controller)
         }
         .windowResizability(.contentSize)
+
+        Window("Set Up Target", id: "targetSetup") {
+            TargetSetupView()
+                .environmentObject(controller)
+        }
+        .windowResizability(.contentSize)
     }
 
     private var statusIcon: String {
@@ -44,6 +50,7 @@ struct GameAutopilotMacApp: App {
             case .thinking: return "hourglass"
             case .acting: return "bolt.fill"
             case .error: return "exclamationmark.triangle.fill"
+            case .completed: return "checkmark.circle.fill"
             }
         case .error:
             return "exclamationmark.triangle.fill"

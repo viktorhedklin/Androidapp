@@ -27,8 +27,15 @@ enum BrainResponseParser {
         let actions = actionsArr.compactMap { Action.from(json: $0) }
         let memoryRaw = (obj["memory"] as? String) ?? ""
         let memoryUpdate = memoryRaw.isEmpty ? nil : memoryRaw
+        let goalComplete = (obj["goalComplete"] as? Bool) ?? false
 
-        return BrainDecision(thought: thought, actions: actions, confidence: confidence, memoryUpdate: memoryUpdate)
+        return BrainDecision(
+            thought: thought,
+            actions: actions,
+            confidence: confidence,
+            memoryUpdate: memoryUpdate,
+            goalComplete: goalComplete
+        )
     }
 
     static func stripCodeFences(_ s: String) -> String {

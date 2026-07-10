@@ -18,6 +18,8 @@ struct SettingsView: View {
     @State private var useSetOfMarks: Bool
     @State private var apiKeyInput: String = ""
     @State private var hasStoredKey: Bool
+    @State private var researchKeyInput: String = ""
+    @State private var hasStoredResearchKey: Bool
 
     init() {
         let s = AutopilotController.shared.settingsStore.settings
@@ -29,6 +31,7 @@ struct SettingsView: View {
         _onlyActOnTarget = State(initialValue: s.onlyActOnTarget)
         _useSetOfMarks = State(initialValue: s.useSetOfMarks)
         _hasStoredKey = State(initialValue: Keychain.hasValue())
+        _hasStoredResearchKey = State(initialValue: Keychain.hasValue(account: "researchApiKey"))
     }
 
     var body: some View {
@@ -68,6 +71,23 @@ struct SettingsView: View {
             Toggle("Only act when target is frontmost", isOn: $onlyActOnTarget)
             Toggle("Use set-of-marks prompting (recommended)", isOn: $useSetOfMarks)
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Optional: live web research (Gemini)").font(.caption).foregroundStyle(.secondary)
+                SecureField(
+                    hasStoredResearchKey ? "Gemini key for research (set -- leave blank to keep)" : "Gemini key for research (optional)",
+                    text: $researchKeyInput
+                )
+                Text("Without this, pre-game research uses your main provider's training knowledge instead of live search -- still useful, just possibly outdated for very new or frequently-changed targets.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                if hasStoredResearchKey {
+                    Button("Clear research key") {
+                        Keychain.delete(account: "researchApiKey")
+                        hasStoredResearchKey = false
+                    }
+                    .foregroundStyle(.red)
+                }
+            }
+
             HStack {
                 Button("Cancel") { dismissWindow(id: "settings") }
                 Spacer()
@@ -96,6 +116,10 @@ struct SettingsView: View {
         if !apiKeyInput.isEmpty {
             Keychain.set(apiKeyInput, account: "apiKey")
             hasStoredKey = true
+        }
+        if !researchKeyInput.isEmpty {
+            Keychain.set(researchKeyInput, account: "researchApiKey")
+            hasStoredResearchKey = true
         }
         let merged = Settings(
             provider: provider,
